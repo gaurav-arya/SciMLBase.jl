@@ -390,7 +390,7 @@ See the `modelingtoolkitize` function from
 automatically symbolically generating the Jacobian and more from the
 numerically-defined functions.
 """
-struct ODEFunction{iip, specialize, F, TMM, Ta, Tt, TJ, JVP, VJP, JP, SP, TW, TWt, TPJ, S,
+struct ODEFunction{iip, specialize, F, TMM, Ta, Tt, TJ, JVP, VJP, JP, SP, TW, TWt, WfP, TPJ, S,
                    S2, S3, O, TCV,
                    SYS} <: AbstractODEFunction{iip}
     f::F
@@ -404,6 +404,7 @@ struct ODEFunction{iip, specialize, F, TMM, Ta, Tt, TJ, JVP, VJP, JP, SP, TW, TW
     sparsity::SP
     Wfact::TW
     Wfact_t::TWt
+    Wfact_prototype::WfP
     paramjac::TPJ
     syms::S
     indepsym::S2
@@ -2161,6 +2162,7 @@ function ODEFunction{iip, specialize}(f;
                                                  jac_prototype,
                                       Wfact = __has_Wfact(f) ? f.Wfact : nothing,
                                       Wfact_t = __has_Wfact_t(f) ? f.Wfact_t : nothing,
+                                      Wfact_prototype = __has_Wfact_prototype(f) ? f.Wfact_prototype : nothing,
                                       paramjac = __has_paramjac(f) ? f.paramjac : nothing,
                                       syms = __has_syms(f) ? f.syms : nothing,
                                       indepsym = __has_indepsym(f) ? f.indepsym : nothing,
@@ -2181,13 +2183,22 @@ function ODEFunction{iip, specialize}(f;
         error("FunctionWrapperSpecialize must be used on the problem constructor for access to u0, p, and t types!")
     end
 
-    if jac === nothing && isa(jac_prototype, AbstractDiffEqLinearOperator)
+    if jac === nothing && isa(jac_prototype, Union{AbstractDiffEqLinearOperator, SciMLOperators.AbstractSciMLOperator})
         if iip
             jac = update_coefficients! #(J,u,p,t)
         else
             jac = (u, p, t) -> update_coefficients!(deepcopy(jac_prototype), u, p, t)
         end
     end
+
+    # can't generically use update_coefficients! because also need to provide γ.
+    # if Wfact === nothing && isa(Wfact_prototype, Union{AbstractDiffEqLinearOperator, SciMLOperators.AbstractSciMLOperator})
+    #     if iip
+    #         Wfact = update_coefficients! #(J,u,p,t)
+    #     else
+    #         Wfact = (u, p, t) -> update_coefficients!(deepcopy(Wfact_prototype), u, p, t)
+    #     end
+    # end
 
     if jac_prototype !== nothing && colorvec === nothing &&
        ArrayInterfaceCore.fast_matrix_colors(jac_prototype)
@@ -2216,34 +2227,34 @@ function ODEFunction{iip, specialize}(f;
         ODEFunction{iip, specialize,
                     Any, Any, Any, Any,
                     Any, Any, Any, typeof(jac_prototype),
-                    typeof(sparsity), Any, Any, Any,
+                    typeof(sparsity), Any, Any, typeof(Wfact_prototype), Any,
                     typeof(syms), typeof(indepsym), typeof(paramsyms), Any,
                     typeof(_colorvec),
                     typeof(sys)}(f, mass_matrix, analytic, tgrad, jac,
                                  jvp, vjp, jac_prototype, sparsity, Wfact,
-                                 Wfact_t, paramjac, syms, indepsym, paramsyms,
+                                 Wfact_t, Wfact_prototype, paramjac, syms, indepsym, paramsyms,
                                  observed, _colorvec, sys)
     elseif specialize === false
         ODEFunction{iip, FunctionWrapperSpecialize,
                     typeof(f), typeof(mass_matrix), typeof(analytic), typeof(tgrad),
                     typeof(jac), typeof(jvp), typeof(vjp), typeof(jac_prototype),
-                    typeof(sparsity), typeof(Wfact), typeof(Wfact_t), typeof(paramjac),
+                    typeof(sparsity), typeof(Wfact), typeof(Wfact_t), typeof(Wfact_prototype), typeof(paramjac),
                     typeof(syms), typeof(indepsym), typeof(paramsyms), typeof(observed),
                     typeof(_colorvec),
                     typeof(sys)}(f, mass_matrix, analytic, tgrad, jac,
                                  jvp, vjp, jac_prototype, sparsity, Wfact,
-                                 Wfact_t, paramjac, syms, indepsym, paramsyms,
+                                 Wfact_t, Wfact_prototype, paramjac, syms, indepsym, paramsyms,
                                  observed, _colorvec, sys)
     else
         ODEFunction{iip, specialize,
                     typeof(f), typeof(mass_matrix), typeof(analytic), typeof(tgrad),
                     typeof(jac), typeof(jvp), typeof(vjp), typeof(jac_prototype),
-                    typeof(sparsity), typeof(Wfact), typeof(Wfact_t), typeof(paramjac),
+                    typeof(sparsity), typeof(Wfact), typeof(Wfact_t), typeof(Wfact_prototype), typeof(paramjac),
                     typeof(syms), typeof(indepsym), typeof(paramsyms), typeof(observed),
                     typeof(_colorvec),
                     typeof(sys)}(f, mass_matrix, analytic, tgrad, jac,
                                  jvp, vjp, jac_prototype, sparsity, Wfact,
-                                 Wfact_t, paramjac, syms, indepsym, paramsyms,
+                                 Wfact_t, Wfact_prototype, paramjac, syms, indepsym, paramsyms,
                                  observed, _colorvec, sys)
     end
 end
@@ -2259,23 +2270,23 @@ function unwrapped_f(f::ODEFunction, newf = unwrapped_f(f.f))
     if specialization(f) === NoSpecialize
         ODEFunction{isinplace(f), specialization(f), Any, Any, Any,
                     Any, Any, Any, Any, typeof(f.jac_prototype),
-                    typeof(f.sparsity), Any, Any, Any,
+                    typeof(f.sparsity), Any, Any, typeof(f.W_protoype), Any,
                     typeof(f.syms), Any, Any, Any, typeof(f.colorvec),
                     typeof(f.sys)}(newf, f.mass_matrix, f.analytic, f.tgrad, f.jac,
                                    f.jvp, f.vjp, f.jac_prototype, f.sparsity, f.Wfact,
-                                   f.Wfact_t, f.paramjac, f.syms, f.indepsym, f.paramsyms,
+                                   f.Wfact_t, f.Wfact_prototype, f.paramjac, f.syms, f.indepsym, f.paramsyms,
                                    f.observed, f.colorvec, f.sys)
     else
         ODEFunction{isinplace(f), specialization(f), typeof(newf), typeof(f.mass_matrix),
                     typeof(f.analytic), typeof(f.tgrad),
                     typeof(f.jac), typeof(f.jvp), typeof(f.vjp), typeof(f.jac_prototype),
-                    typeof(f.sparsity), typeof(f.Wfact), typeof(f.Wfact_t),
+                    typeof(f.sparsity), typeof(f.Wfact), typeof(f.Wfact_t), typeof(f.Wfact_prototype),
                     typeof(f.paramjac),
                     typeof(f.syms), typeof(f.indepsym), typeof(f.paramsyms),
                     typeof(f.observed), typeof(f.colorvec),
                     typeof(f.sys)}(newf, f.mass_matrix, f.analytic, f.tgrad, f.jac,
                                    f.jvp, f.vjp, f.jac_prototype, f.sparsity, f.Wfact,
-                                   f.Wfact_t, f.paramjac, f.syms, f.indepsym, f.paramsyms,
+                                   f.Wfact_t, f.Wfact_prototype, f.paramjac, f.syms, f.indepsym, f.paramsyms,
                                    f.observed, f.colorvec, f.sys)
     end
 end
@@ -3631,6 +3642,7 @@ __has_vjp(f) = isdefined(f, :vjp)
 __has_tgrad(f) = isdefined(f, :tgrad)
 __has_Wfact(f) = isdefined(f, :Wfact)
 __has_Wfact_t(f) = isdefined(f, :Wfact_t)
+__has_Wfact_prototype(f) = isdefined(f, :Wfact_prototype)
 __has_paramjac(f) = isdefined(f, :paramjac)
 __has_jac_prototype(f) = isdefined(f, :jac_prototype)
 __has_sparsity(f) = isdefined(f, :sparsity)

@@ -16,6 +16,8 @@ import FunctionWrappersWrappers
 import RuntimeGeneratedFunctions
 import EnumX
 
+import SciMLOperators
+
 function __solve end
 function __init end
 
